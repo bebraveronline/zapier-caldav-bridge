@@ -33,19 +33,31 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // Validation schemas
+const ParticipantSchema = z.object({
+  email: z.string().email(),
+  name: z.string().optional()
+});
+
 const EventSchema = z.object({
   summary: z.string(),
   description: z.string().optional(),
   startDate: z.string(),
   endDate: z.string(),
-  location: z.string().optional()
+  location: z.string().optional(),
+  participants: z.array(ParticipantSchema).optional(),
+  notes: z.string().optional(),
+  createContact: z.boolean().optional() // Flag to create contact from participant
 });
 
 const ContactSchema = z.object({
-  fullName: z.string(),
+  firstName: z.string(),
+  lastName: z.string(),
   email: z.string().email(),
   phone: z.string().optional(),
-  organization: z.string().optional()
+  mobilePhone: z.string().optional(),
+  organization: z.string().optional(),
+  nextMeeting: z.string().optional(), // ISO date string
+  notes: z.string().optional()
 });
 
 // API key middleware
@@ -89,14 +101,39 @@ app.get('/api/events/:id', authenticateApiKey, async (req, res) => {
 app.post('/api/events', authenticateApiKey, async (req, res) => {
   try {
     const event = EventSchema.parse(req.body);
-    const response = await fetch(`${process.env.RADICALE_URL}/calendar/${generateUUID()}.ics`, {
+    const eventId = generateUUID();
+    
+    // Create event
+    const eventResponse = await fetch(`${process.env.RADICALE_URL}/calendar/${eventId}.ics`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/calendar; charset=utf-8' },
       body: generateICalEvent(event)
     });
 
-    if (!response.ok) {
+    if (!eventResponse.ok) {
       throw new Error('Failed to create event');
+    }
+
+    // Create contacts for participants if requested
+    if (event.createContact && event.participants) {
+      for (const participant of event.participants) {
+        const [firstName, ...lastNameParts] = (participant.name || participant.email.split('@')[0]).split(' ');
+        const lastName = lastNameParts.join(' ') || '';
+        
+        const contact = {
+          firstName,
+          lastName,
+          email: participant.email,
+          nextMeeting: event.startDate,
+          notes: `Created from event: ${event.summary}`
+        };
+
+        await fetch(`${process.env.RADICALE_URL}/contacts/${generateUUID()}.vcf`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/vcard; charset=utf-8' },
+          body: generateVCard(contact)
+        });
+      }
     }
 
     res.status(201).json({ message: 'Event created successfully', event });
@@ -231,28 +268,44 @@ function generateUUID() {
 }
 
 function generateICalEvent(event) {
-  return `BEGIN:VCALENDAR
+  let icalEvent = `BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VEVENT
 UID:${generateUUID()}
 SUMMARY:${event.summary}
 DTSTART:${new Date(event.startDate).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}
-DTEND:${new Date(event.endDate).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}
-${event.description ? `DESCRIPTION:${event.description}` : ''}
-${event.location ? `LOCATION:${event.location}` : ''}
-END:VEVENT
-END:VCALENDAR`;
+DTEND:${new Date(event.endDate).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`;
+
+  if (event.description) icalEvent += `\nDESCRIPTION:${event.description}`;
+  if (event.location) icalEvent += `\nLOCATION:${event.location}`;
+  if (event.notes) icalEvent += `\nX-ALT-DESC;FMTTYPE=text/plain:${event.notes}`;
+  
+  if (event.participants) {
+    event.participants.forEach(participant => {
+      icalEvent += `\nATTENDEE;CN=${participant.name || ''}:mailto:${participant.email}`;
+    });
+  }
+
+  icalEvent += '\nEND:VEVENT\nEND:VCALENDAR';
+  return icalEvent;
 }
 
 function generateVCard(contact) {
-  return `BEGIN:VCARD
+  let vcard = `BEGIN:VCARD
 VERSION:4.0
 UID:${generateUUID()}
-FN:${contact.fullName}
-EMAIL:${contact.email}
-${contact.phone ? `TEL:${contact.phone}` : ''}
-${contact.organization ? `ORG:${contact.organization}` : ''}
-END:VCARD`;
+FN:${contact.firstName} ${contact.lastName}
+N:${contact.lastName};${contact.firstName};;;
+EMAIL:${contact.email}`;
+
+  if (contact.phone) vcard += `\nTEL;TYPE=work:${contact.phone}`;
+  if (contact.mobilePhone) vcard += `\nTEL;TYPE=cell:${contact.mobilePhone}`;
+  if (contact.organization) vcard += `\nORG:${contact.organization}`;
+  if (contact.nextMeeting) vcard += `\nX-NEXT-MEETING:${contact.nextMeeting}`;
+  if (contact.notes) vcard += `\nNOTE:${contact.notes}`;
+
+  vcard += '\nEND:VCARD';
+  return vcard;
 }
 
 function parseICalToEvents(icalData) {
