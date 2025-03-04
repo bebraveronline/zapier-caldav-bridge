@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./logs/caddy:/var/log/caddy
+    environment:
+      - DOMAIN=${DOMAIN}
+    depends_on:
+      - bridge
+    restart: always
+
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - RADICALE_URL=http://radicale:5232
+      - API_KEY=${API_KEY}
+    depends_on:
+      - radicale
+    restart: always
+
+  radicale:
+    image: tomsquest/radicale
+    expose:
+      - "5232"
+    volumes:
+      - radicale_data:/data
+    environment:
+      - RADICALE_AUTH_TYPE=htpasswd
+      - RADICALE_HTPASSWD_FILENAME=/data/users
+      - RADICALE_HTPASSWD_ENCRYPTION=bcrypt
+    restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:
+  radicale_data:
+  caddy_logs:

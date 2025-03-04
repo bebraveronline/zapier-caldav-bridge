@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - RADICALE_URL=http://radicale:5232
+      - API_KEY=your-secure-api-key-here
+    depends_on:
+      - radicale
+
+  radicale:
+    image: tomsquest/radicale
+    ports:
+      - "5232:5232"
+    volumes:
+      - radicale_data:/data
+    environment:
+      - RADICALE_AUTH_TYPE=none  # For testing. Use 'htpasswd' in production
+
+volumes:
+  radicale_data:
