@@ -4,8 +4,10 @@ A secure bridge service that connects Zapier with a Radicale CalDAV/CardDAV serv
 
 ## Features
 
-- Calendar event creation via Zapier
-- Contact management integration
+- Calendar event creation and management
+- Contact management with detailed information
+- Automatic contact creation from event participants
+- Meeting-contact linking
 - Rate limiting and security measures
 - Docker Compose deployment with Caddy for automatic HTTPS
 - API key authentication
@@ -66,18 +68,6 @@ The `API_KEY` is a crucial security measure that acts as a shared secret between
 - Prevents unauthorized access to your calendar and contacts
 - Should be rotated periodically for enhanced security
 
-To configure this key in Zapier:
-1. Log in to [Zapier](https://zapier.com)
-2. Create a new Zap
-3. Choose "Webhooks by Zapier" as your action
-4. Select "Custom Request"
-5. In the "Custom Request" configuration:
-   - Set your URL (e.g., `https://your-domain.com/api/events`)
-   - Add a header named `X-API-Key` with your generated API key
-   - Add another header `Content-Type: application/json`
-   - Set the request method to POST
-   - Configure the request body according to the API documentation below
-
 4. Create required directories:
 ```bash
 mkdir -p logs/caddy
@@ -108,8 +98,9 @@ Caddy automatically handles SSL/HTTPS certificates through Let's Encrypt:
 
 ## API Documentation
 
-### Create Calendar Event
+### Calendar Events
 
+#### Create Event
 ```http
 POST /api/events
 Content-Type: application/json
@@ -120,24 +111,103 @@ X-API-Key: your-api-key-here
   "description": "Quarterly Review",
   "startDate": "2024-03-15T10:00:00Z",
   "endDate": "2024-03-15T11:00:00Z",
-  "location": "Conference Room A"
+  "location": "Conference Room A",
+  "participants": [
+    {
+      "email": "client@example.com",
+      "name": "John Smith"
+    }
+  ],
+  "notes": "Prepare Q1 reports",
+  "createContact": true
 }
 ```
 
-### Create Contact
+The `createContact` flag will automatically create contact entries for all participants.
 
+### Contacts
+
+#### Create Contact
 ```http
 POST /api/contacts
 Content-Type: application/json
 X-API-Key: your-api-key-here
 
 {
-  "fullName": "Jane Smith",
+  "firstName": "Jane",
+  "lastName": "Smith",
   "email": "jane@example.com",
   "phone": "+1234567890",
-  "organization": "Tech Corp"
+  "mobilePhone": "+1987654321",
+  "organization": "Tech Corp",
+  "nextMeeting": "2024-03-15T10:00:00Z",
+  "notes": "Key client contact"
 }
 ```
+
+## Integration Features
+
+### Event-Contact Integration
+- Automatic contact creation from event participants
+- Meeting linking to contacts
+- Contact synchronization with calendar events
+- Participant tracking and management
+
+### Contact Management
+- Separate first and last name fields
+- Multiple phone number support (work and mobile)
+- Next meeting tracking
+- Notes and additional information storage
+- Organization affiliation
+
+### Calendar Features
+- Comprehensive event details
+- Participant management
+- Location tracking
+- Notes and description fields
+- Automatic contact synchronization
+
+## Technologies Used
+
+### Backend
+- **Node.js**: Server runtime environment
+- **Express.js**: Web application framework
+- **Zod**: Schema validation and type checking
+- **node-fetch**: HTTP client for API requests
+- **ical.js**: iCalendar format handling
+- **vcard4**: vCard format handling
+- **dotenv**: Environment configuration
+- **cors**: Cross-origin resource sharing
+- **helmet**: Security middleware
+- **express-rate-limit**: Rate limiting
+
+### Calendar/Contact Standards
+- **iCalendar (RFC 5545)**: Calendar data format
+- **vCard 4.0 (RFC 6350)**: Contact data format
+- **CalDAV**: Calendar synchronization protocol
+- **CardDAV**: Contact synchronization protocol
+
+### Security
+- **API Key Authentication**: Request validation
+- **Rate Limiting**: DDoS protection
+- **CORS**: Cross-origin security
+- **Helmet**: HTTP header security
+- **HTTPS**: TLS encryption
+
+### Infrastructure
+- **Docker**: Containerization
+- **Docker Compose**: Multi-container orchestration
+- **Caddy**: Web server and reverse proxy
+  - Automatic HTTPS
+  - Let's Encrypt integration
+  - Modern TLS configuration
+- **Radicale**: CalDAV/CardDAV server
+
+### Development Tools
+- **TypeScript**: Type safety and development experience
+- **ESLint**: Code quality and consistency
+- **Prettier**: Code formatting
+- **nodemon**: Development auto-reload
 
 ## Rate Limiting
 
