@@ -27,7 +27,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 1. Clone the repository:
 ```bash
-git clone <your-repository>
+git clone https://github.com/bebraveronline/zapier-caldav-bridge.git
 cd zapier-radicale-bridge
 ```
 
