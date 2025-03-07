@@ -36,6 +36,7 @@ services:
     expose:
       - "5232"
     volumes:
+      - ./radicale.conf:/etc/radicale/radicale.conf:ro
       - radicale_data:/data
     environment:
       - RADICALE_AUTH_TYPE=htpasswd

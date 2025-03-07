@@ -4,17 +4,11 @@ A secure bridge service that connects Zapier with a Radicale CalDAV/CardDAV serv
 
 ## Features
 
-- Calendar event creation and management
-- Contact management with detailed information
-- Automatic contact creation from event participants
-- Meeting-contact linking
+- Calendar event creation via Zapier
+- Contact management integration
 - Rate limiting and security measures
 - Docker Compose deployment with Caddy for automatic HTTPS
 - API key authentication
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Prerequisites
 
@@ -27,8 +21,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/bebraveronline/zapier-caldav-bridge.git
-cd zapier-radicale-bridge
+git clone https://github.com/bebraveronline/zapier-caldav-bridge
+cd zapier-caldav-bridge
 ```
 
 2. Create a `.env` file:
@@ -68,6 +62,18 @@ The `API_KEY` is a crucial security measure that acts as a shared secret between
 - Prevents unauthorized access to your calendar and contacts
 - Should be rotated periodically for enhanced security
 
+To configure this key in Zapier:
+1. Log in to [Zapier](https://zapier.com)
+2. Create a new Zap
+3. Choose "Webhooks by Zapier" as your action
+4. Select "Custom Request"
+5. In the "Custom Request" configuration:
+   - Set your URL (e.g., `https://your-domain.com/api/events`)
+   - Add a header named `X-API-Key` with your generated API key
+   - Add another header `Content-Type: application/json`
+   - Set the request method to POST
+   - Configure the request body according to the API documentation below
+
 4. Create required directories:
 ```bash
 mkdir -p logs/caddy
@@ -96,6 +102,59 @@ Caddy automatically handles SSL/HTTPS certificates through Let's Encrypt:
 - Modern TLS configuration is enabled by default
 - Certificates are stored in the `caddy_data` volume
 
+## Zapier Integration
+
+### 1. Create a Zapier Account
+- Sign up at [zapier.com](https://zapier.com)
+- Navigate to "My Apps" → "Build a Connection"
+
+### 2. Configure Webhook Action
+
+#### For Calendar Events:
+- **Endpoint**: `https://your-domain.com/api/events`
+- **Method**: POST
+- **Headers**:
+  - `Content-Type: application/json`
+  - `X-API-Key: your-api-key-here`
+- **Body Format**:
+```json
+{
+  "summary": "Event Title",
+  "description": "Event Description",
+  "startDate": "2024-03-15T10:00:00Z",
+  "endDate": "2024-03-15T11:00:00Z",
+  "location": "Optional Location",
+  "participants": [
+    {
+      "email": "participant@example.com",
+      "name": "Participant Name"
+    }
+  ],
+  "notes": "Additional notes about the event",
+  "createContact": true
+}
+```
+
+#### For Contacts:
+- **Endpoint**: `https://your-domain.com/api/contacts`
+- **Method**: POST
+- **Headers**:
+  - `Content-Type: application/json`
+  - `X-API-Key: your-api-key-here`
+- **Body Format**:
+```json
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john@example.com",
+  "phone": "+1234567890",
+  "mobilePhone": "+1987654321",
+  "organization": "Company Name",
+  "nextMeeting": "2024-03-15T10:00:00Z",
+  "notes": "Important contact notes"
+}
+```
+
 ## API Documentation
 
 ### Calendar Events
@@ -123,11 +182,35 @@ X-API-Key: your-api-key-here
 }
 ```
 
-The `createContact` flag will automatically create contact entries for all participants.
+The response includes subscription URLs for the calendar:
+```json
+{
+  "message": "Event created successfully",
+  "event": { ... },
+  "subscriptionUrls": {
+    "full": "/calendar/event-id/full.ics",
+    "freebusy": "/calendar/event-id/freebusy.ics"
+  }
+}
+```
 
-### Contacts
+### Calendar Subscriptions
 
-#### Create Contact
+#### Full Calendar (Authenticated)
+```http
+GET /calendar/:calendarId/full.ics
+X-API-Key: your-api-key-here
+```
+Returns the full calendar in iCalendar format with complete event details. Requires authentication.
+
+#### Free/Busy Calendar (Public)
+```http
+GET /calendar/:calendarId/freebusy.ics
+```
+Returns the calendar's free/busy information in iCalendar format. No authentication required.
+
+### Create Contact
+
 ```http
 POST /api/contacts
 Content-Type: application/json
@@ -144,70 +227,6 @@ X-API-Key: your-api-key-here
   "notes": "Key client contact"
 }
 ```
-
-## Integration Features
-
-### Event-Contact Integration
-- Automatic contact creation from event participants
-- Meeting linking to contacts
-- Contact synchronization with calendar events
-- Participant tracking and management
-
-### Contact Management
-- Separate first and last name fields
-- Multiple phone number support (work and mobile)
-- Next meeting tracking
-- Notes and additional information storage
-- Organization affiliation
-
-### Calendar Features
-- Comprehensive event details
-- Participant management
-- Location tracking
-- Notes and description fields
-- Automatic contact synchronization
-
-## Technologies Used
-
-### Backend
-- **Node.js**: Server runtime environment
-- **Express.js**: Web application framework
-- **Zod**: Schema validation and type checking
-- **node-fetch**: HTTP client for API requests
-- **ical.js**: iCalendar format handling
-- **vcard4**: vCard format handling
-- **dotenv**: Environment configuration
-- **cors**: Cross-origin resource sharing
-- **helmet**: Security middleware
-- **express-rate-limit**: Rate limiting
-
-### Calendar/Contact Standards
-- **iCalendar (RFC 5545)**: Calendar data format
-- **vCard 4.0 (RFC 6350)**: Contact data format
-- **CalDAV**: Calendar synchronization protocol
-- **CardDAV**: Contact synchronization protocol
-
-### Security
-- **API Key Authentication**: Request validation
-- **Rate Limiting**: DDoS protection
-- **CORS**: Cross-origin security
-- **Helmet**: HTTP header security
-- **HTTPS**: TLS encryption
-
-### Infrastructure
-- **Docker**: Containerization
-- **Docker Compose**: Multi-container orchestration
-- **Caddy**: Web server and reverse proxy
-  - Automatic HTTPS
-  - Let's Encrypt integration
-  - Modern TLS configuration
-- **Radicale**: CalDAV/CardDAV server
-
-### Development Tools
-- **TypeScript**: Type safety and development experience
-- **ESLint**: Code quality and consistency
-- **Prettier**: Code formatting
-- **nodemon**: Development auto-reload
 
 ## Rate Limiting
 
@@ -258,6 +277,36 @@ Common issues and solutions:
    - Verify Radicale service is running
    - Check network connectivity
    - Validate URLs in configuration
+
+## Technologies Used
+
+- **Backend**:
+  - Node.js with Express for the API server
+  - Zod for request validation
+  - Express Rate Limit for API protection
+  - Helmet for security headers
+  - CORS for cross-origin resource sharing
+
+- **Calendar/Contacts Server**:
+  - Radicale for CalDAV/CardDAV support
+  - iCal.js for calendar data parsing
+  - vCard4 for contact data handling
+
+- **Infrastructure**:
+  - Docker and Docker Compose for containerization
+  - Caddy for reverse proxy and automatic HTTPS
+  - Let's Encrypt for SSL certificates
+
+- **Security**:
+  - API key authentication
+  - Rate limiting
+  - HTTPS encryption
+  - Security headers
+  - Input validation
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Support
 

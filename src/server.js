@@ -5,11 +5,15 @@ import rateLimit from 'express-rate-limit';
 import { config } from 'dotenv';
 import { z } from 'zod';
 import fetch from 'node-fetch';
+import NodeCache from 'node-cache';
 
 config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// In-memory cache for webhooks with 1-hour TTL
+const webhookCache = new NodeCache({ stdTTL: 3600 });
 
 // Security middleware
 app.use(helmet());
@@ -46,7 +50,7 @@ const EventSchema = z.object({
   location: z.string().optional(),
   participants: z.array(ParticipantSchema).optional(),
   notes: z.string().optional(),
-  createContact: z.boolean().optional() // Flag to create contact from participant
+  createContact: z.boolean().optional()
 });
 
 const ContactSchema = z.object({
@@ -56,8 +60,15 @@ const ContactSchema = z.object({
   phone: z.string().optional(),
   mobilePhone: z.string().optional(),
   organization: z.string().optional(),
-  nextMeeting: z.string().optional(), // ISO date string
+  nextMeeting: z.string().optional(),
   notes: z.string().optional()
+});
+
+const WebhookSchema = z.object({
+  url: z.string().url(),
+  event: z.enum(['created', 'updated', 'cancelled', 'rescheduled']),
+  type: z.enum(['calendar', 'contact']),
+  targetUrl: z.string().url()
 });
 
 // API key middleware
@@ -70,6 +81,83 @@ const authenticateApiKey = (req, res, next) => {
   
   next();
 };
+
+// Webhook registration endpoints
+app.post('/api/webhooks', authenticateApiKey, async (req, res) => {
+  try {
+    const webhook = WebhookSchema.parse(req.body);
+    const webhookId = generateUUID();
+    webhookCache.set(webhookId, webhook);
+    
+    res.status(201).json({
+      id: webhookId,
+      message: 'Webhook registered successfully',
+      webhook
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete('/api/webhooks/:id', authenticateApiKey, (req, res) => {
+  const { id } = req.params;
+  if (webhookCache.del(id)) {
+    res.status(200).json({ message: 'Webhook deleted successfully' });
+  } else {
+    res.status(404).json({ error: 'Webhook not found' });
+  }
+});
+
+// Helper function to notify webhooks
+async function notifyWebhooks(type, event, data) {
+  const webhooks = webhookCache.keys()
+    .map(key => ({ id: key, ...webhookCache.get(key) }))
+    .filter(webhook => webhook.type === type && webhook.event === event);
+
+  for (const webhook of webhooks) {
+    try {
+      await fetch(webhook.targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-ID': webhook.id
+        },
+        body: JSON.stringify(data)
+      });
+    } catch (error) {
+      console.error(`Failed to notify webhook ${webhook.id}:`, error);
+    }
+  }
+}
+
+// Calendar subscription endpoints
+app.get('/calendar/:calendarId/full.ics', authenticateApiKey, async (req, res) => {
+  try {
+    const response = await fetch(`${process.env.RADICALE_URL}/${req.params.calendarId}/calendar.ics`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch calendar');
+    }
+    const calendar = await response.text();
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.send(calendar);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/calendar/:calendarId/freebusy.ics', async (req, res) => {
+  try {
+    const response = await fetch(`${process.env.RADICALE_URL}/${req.params.calendarId}/freebusy.ics`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch free/busy information');
+    }
+    const freebusy = await response.text();
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.send(freebusy);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Calendar Events API
 app.get('/api/events', authenticateApiKey, async (req, res) => {
@@ -136,7 +224,17 @@ app.post('/api/events', authenticateApiKey, async (req, res) => {
       }
     }
 
-    res.status(201).json({ message: 'Event created successfully', event });
+    // Notify webhooks
+    await notifyWebhooks('calendar', 'created', { event, id: eventId });
+
+    res.status(201).json({ 
+      message: 'Event created successfully', 
+      event,
+      subscriptionUrls: {
+        full: `/calendar/${eventId}/full.ics`,
+        freebusy: `/calendar/${eventId}/freebusy.ics`
+      }
+    });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -145,7 +243,14 @@ app.post('/api/events', authenticateApiKey, async (req, res) => {
 app.put('/api/events/:id', authenticateApiKey, async (req, res) => {
   try {
     const event = EventSchema.parse(req.body);
-    const response = await fetch(`${process.env.RADICALE_URL}/calendar/${req.params.id}.ics`, {
+    const eventId = req.params.id;
+    
+    // Check if this is a reschedule
+    const oldEventResponse = await fetch(`${process.env.RADICALE_URL}/calendar/${eventId}.ics`);
+    const oldEvent = oldEventResponse.ok ? await oldEventResponse.text() : null;
+    const isReschedule = oldEvent && hasDateChanged(oldEvent, event);
+
+    const response = await fetch(`${process.env.RADICALE_URL}/calendar/${eventId}.ics`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/calendar; charset=utf-8' },
       body: generateICalEvent(event)
@@ -155,6 +260,10 @@ app.put('/api/events/:id', authenticateApiKey, async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
+    // Notify webhooks
+    const eventType = isReschedule ? 'rescheduled' : 'updated';
+    await notifyWebhooks('calendar', eventType, { event, id: eventId });
+
     res.status(200).json({ message: 'Event updated successfully', event });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -163,12 +272,26 @@ app.put('/api/events/:id', authenticateApiKey, async (req, res) => {
 
 app.delete('/api/events/:id', authenticateApiKey, async (req, res) => {
   try {
-    const response = await fetch(`${process.env.RADICALE_URL}/calendar/${req.params.id}.ics`, {
+    const eventId = req.params.id;
+    
+    // Get event details before deletion for webhook
+    const eventResponse = await fetch(`${process.env.RADICALE_URL}/calendar/${eventId}.ics`);
+    const eventDetails = eventResponse.ok ? await eventResponse.text() : null;
+
+    const response = await fetch(`${process.env.RADICALE_URL}/calendar/${eventId}.ics`, {
       method: 'DELETE'
     });
 
     if (!response.ok) {
       return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Notify webhooks
+    if (eventDetails) {
+      await notifyWebhooks('calendar', 'cancelled', { 
+        id: eventId,
+        event: parseICalToEvent(eventDetails)
+      });
     }
 
     res.status(200).json({ message: 'Event deleted successfully' });
@@ -177,37 +300,13 @@ app.delete('/api/events/:id', authenticateApiKey, async (req, res) => {
   }
 });
 
-// Contacts API
-app.get('/api/contacts', authenticateApiKey, async (req, res) => {
-  try {
-    const response = await fetch(`${process.env.RADICALE_URL}/contacts.vcf`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch contacts');
-    }
-    const contacts = await response.text();
-    res.status(200).json({ contacts: parseVCardToContacts(contacts) });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/contacts/:id', authenticateApiKey, async (req, res) => {
-  try {
-    const response = await fetch(`${process.env.RADICALE_URL}/contacts/${req.params.id}.vcf`);
-    if (!response.ok) {
-      return res.status(404).json({ error: 'Contact not found' });
-    }
-    const contact = await response.text();
-    res.status(200).json({ contact: parseVCardToContact(contact) });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
+// Contacts API with webhook support
 app.post('/api/contacts', authenticateApiKey, async (req, res) => {
   try {
     const contact = ContactSchema.parse(req.body);
-    const response = await fetch(`${process.env.RADICALE_URL}/contacts/${generateUUID()}.vcf`, {
+    const contactId = generateUUID();
+    
+    const response = await fetch(`${process.env.RADICALE_URL}/contacts/${contactId}.vcf`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/vcard; charset=utf-8' },
       body: generateVCard(contact)
@@ -216,6 +315,9 @@ app.post('/api/contacts', authenticateApiKey, async (req, res) => {
     if (!response.ok) {
       throw new Error('Failed to create contact');
     }
+
+    // Notify webhooks
+    await notifyWebhooks('contact', 'created', { contact, id: contactId });
 
     res.status(201).json({ message: 'Contact created successfully', contact });
   } catch (error) {
@@ -226,7 +328,9 @@ app.post('/api/contacts', authenticateApiKey, async (req, res) => {
 app.put('/api/contacts/:id', authenticateApiKey, async (req, res) => {
   try {
     const contact = ContactSchema.parse(req.body);
-    const response = await fetch(`${process.env.RADICALE_URL}/contacts/${req.params.id}.vcf`, {
+    const contactId = req.params.id;
+    
+    const response = await fetch(`${process.env.RADICALE_URL}/contacts/${contactId}.vcf`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/vcard; charset=utf-8' },
       body: generateVCard(contact)
@@ -236,25 +340,12 @@ app.put('/api/contacts/:id', authenticateApiKey, async (req, res) => {
       return res.status(404).json({ error: 'Contact not found' });
     }
 
+    // Notify webhooks
+    await notifyWebhooks('contact', 'updated', { contact, id: contactId });
+
     res.status(200).json({ message: 'Contact updated successfully', contact });
   } catch (error) {
     res.status(400).json({ error: error.message });
-  }
-});
-
-app.delete('/api/contacts/:id', authenticateApiKey, async (req, res) => {
-  try {
-    const response = await fetch(`${process.env.RADICALE_URL}/contacts/${req.params.id}.vcf`, {
-      method: 'DELETE'
-    });
-
-    if (!response.ok) {
-      return res.status(404).json({ error: 'Contact not found' });
-    }
-
-    res.status(200).json({ message: 'Contact deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -265,6 +356,11 @@ function generateUUID() {
     const v = c === 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
   });
+}
+
+function hasDateChanged(oldEventData, newEvent) {
+  const oldEvent = parseICalToEvent(oldEventData);
+  return oldEvent.startDate !== newEvent.startDate || oldEvent.endDate !== newEvent.endDate;
 }
 
 function generateICalEvent(event) {
