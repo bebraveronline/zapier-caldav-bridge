@@ -30,7 +30,7 @@ services:
     restart: always
 
   radicale:
-    image: radicalespiral/radicale:latest
+    image: xlrl/radicale:latest
     expose:
       - "5232"
     volumes:

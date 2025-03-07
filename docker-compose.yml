@@ -13,7 +13,7 @@ services:
       - radicale
 
   radicale:
-    image: radicalespiral/radicale:latest
+    image: xlrl/radicale:latest
     ports:
       - "5232:5232"
     volumes:

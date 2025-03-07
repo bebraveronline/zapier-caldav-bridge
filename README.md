@@ -51,6 +51,11 @@ API_KEY=your-generated-api-key-here
 # Service URLs
 RADICALE_URL=http://radicale:5232
 
+# Radicale Authentication
+RADICALE_AUTH_TYPE=htpasswd
+RADICALE_HTPASSWD_FILENAME=/data/users
+RADICALE_HTPASSWD_ENCRYPTION=bcrypt
+
 # Domain Configuration
 DOMAIN=your-domain.com
 ```
@@ -79,7 +84,24 @@ To configure this key in Zapier:
 mkdir -p logs/caddy
 ```
 
-5. Deploy using Docker Compose:
+5. Set up Radicale authentication (required for production):
+
+Create a password file for Radicale:
+```bash
+# Install htpasswd utility (if not already installed)
+# For Ubuntu/Debian:
+apt-get install apache2-utils
+# For Alpine Linux:
+apk add apache2-utils
+
+# Create the users directory
+mkdir -p data/users
+
+# Create a new user (replace 'username' with desired username)
+htpasswd -B -c data/users username
+```
+
+6. Deploy using Docker Compose:
 ```bash
 docker compose -f docker-compose.prod.yml up -d
 ```
@@ -92,7 +114,12 @@ openssl rand -base64 32
 ```
 
 2. Update the API key in your `.env` file
-3. Configure Radicale authentication (recommended for production)
+
+3. Radicale Authentication:
+   - Production setup uses `htpasswd` authentication by default
+   - User credentials are stored in `/data/users` within the container
+   - Uses bcrypt encryption for passwords
+   - Create new users using the `htpasswd` command as shown above
 
 ## SSL/HTTPS
 
@@ -278,6 +305,12 @@ Common issues and solutions:
    - Check network connectivity
    - Validate URLs in configuration
 
+5. **Radicale Authentication Issues**:
+   - Verify htpasswd file exists and is properly formatted
+   - Check user permissions on the htpasswd file
+   - Ensure bcrypt encryption is being used
+   - Validate username/password combinations
+
 ## Technologies Used
 
 - **Backend**:
@@ -288,7 +321,7 @@ Common issues and solutions:
   - CORS for cross-origin resource sharing
 
 - **Calendar/Contacts Server**:
-  - Radicale for CalDAV/CardDAV support
+  - Radicale for CalDAV/CardDAV support (xlrl/radicale)
   - iCal.js for calendar data parsing
   - vCard4 for contact data handling
 
