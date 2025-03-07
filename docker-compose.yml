@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   bridge:
     build:
@@ -15,7 +13,7 @@ services:
       - radicale
 
   radicale:
-    image: tomsquest/radicale
+    image: radicalespiral/radicale:latest
     ports:
       - "5232:5232"
     volumes:
